@@ -94,6 +94,8 @@ function cde_capture_checkout_data($order_id, $data) {
     $table_name = $wpdb->prefix . 'checkout_data';
 
     $order = wc_get_order($order_id);
+
+    // Gather checkout data
     $checkout_data = [
         'billing_first_name' => $order->get_billing_first_name(),
         'billing_last_name'  => $order->get_billing_last_name(),
@@ -104,9 +106,24 @@ function cde_capture_checkout_data($order_id, $data) {
         'order_total'        => $order->get_total(),
     ];
 
+    // Gather product data
+    $product_data = [];
+    foreach ($order->get_items() as $item_id => $item) {
+        $product_data[] = [
+            'name'     => $item->get_name(),
+            'quantity' => $item->get_quantity(),
+            'sku'      => $item->get_product()->get_sku(),
+            'price'    => $item->get_total(),
+        ];
+    }
+
+    // Save to database
     $wpdb->insert($table_name, [
-        'order_id'      => $order_id,
-        'checkout_data' => json_encode($checkout_data),
+        'session_id'    => $order_id, // Using order ID as a unique session ID
+        'field_name'    => 'checkout_data',
+        'field_value'   => json_encode($checkout_data),
+        'product_data'  => json_encode($product_data), // Save product data as JSON
+        'timestamp'     => current_time('mysql'),
     ]);
 }
 
@@ -153,26 +170,9 @@ function cde_handle_excel_download() {
 function cde_generate_excel() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'checkout_data';
-    
-    // Query to restructure the data
-    $query = "
-        SELECT 
-            session_id,
-            MAX(CASE WHEN field_name = 'billing_first_name' THEN field_value END) AS billing_first_name,
-            MAX(CASE WHEN field_name = 'billing_last_name' THEN field_value END) AS billing_last_name,
-            MAX(CASE WHEN field_name = 'billing_company' THEN field_value END) AS billing_company,
-            MAX(CASE WHEN field_name = 'billing_address_1' THEN field_value END) AS billing_address_1,
-            MAX(CASE WHEN field_name = 'billing_address_2' THEN field_value END) AS billing_address_2,
-            MAX(CASE WHEN field_name = 'billing_city' THEN field_value END) AS billing_city,
-            MAX(CASE WHEN field_name = 'billing_postcode' THEN field_value END) AS billing_postcode,
-            MAX(CASE WHEN field_name = 'billing_phone' THEN field_value END) AS billing_phone,
-            MAX(CASE WHEN field_name = 'billing_email' THEN field_value END) AS billing_email,
-            MAX(timestamp) AS last_updated
-        FROM $table_name
-        GROUP BY session_id;
-    ";
-    
-    // Execute the query and fetch the results
+
+    // Fetch data including product data
+    $query = "SELECT session_id, field_value, product_data, timestamp FROM $table_name";
     $results = $wpdb->get_results($query);
 
     if (empty($results)) {
@@ -182,39 +182,43 @@ function cde_generate_excel() {
     $spreadsheet = new Spreadsheet();
     $sheet = $spreadsheet->getActiveSheet();
 
-    // Set headers for the exported data
+    // Set headers
     $sheet->setCellValue('A1', 'Session/User ID');
-    $sheet->setCellValue('B1', 'Billing First Name');
-    $sheet->setCellValue('C1', 'Billing Last Name');
-    $sheet->setCellValue('D1', 'Billing Company');
-    $sheet->setCellValue('E1', 'Billing Address 1');
-    $sheet->setCellValue('F1', 'Billing Address 2');
-    $sheet->setCellValue('G1', 'Billing City');
-    $sheet->setCellValue('H1', 'Billing Postcode');
-    $sheet->setCellValue('I1', 'Billing Phone');
-    $sheet->setCellValue('J1', 'Billing Email');
-    $sheet->setCellValue('K1', 'Last Updated');
+    $sheet->setCellValue('B1', 'Checkout Data');
+    $sheet->setCellValue('C1', 'Product Data');
+    $sheet->setCellValue('D1', 'Timestamp');
 
     $current_row = 2;
 
-    // Write the data to the sheet
     foreach ($results as $row) {
+        $checkout_data = json_decode($row->field_value, true);
+        $product_data = json_decode($row->product_data, true);
+
+        // Format product data for display
+        $product_data_str = '';
+        if ($product_data) {
+            foreach ($product_data as $product) {
+                $product_data_str .= sprintf(
+                    "Name: %s, Quantity: %d, SKU: %s, Price: %.2f\n",
+                    $product['name'],
+                    $product['quantity'],
+                    $product['sku'],
+                    $product['price']
+                );
+            }
+        }
+
+        // Fill Excel sheet
         $sheet->setCellValue("A$current_row", $row->session_id);
-        $sheet->setCellValue("B$current_row", $row->billing_first_name);
-        $sheet->setCellValue("C$current_row", $row->billing_last_name);
-        $sheet->setCellValue("D$current_row", $row->billing_company);
-        $sheet->setCellValue("E$current_row", $row->billing_address_1);
-        $sheet->setCellValue("F$current_row", $row->billing_address_2);
-        $sheet->setCellValue("G$current_row", $row->billing_city);
-        $sheet->setCellValue("H$current_row", $row->billing_postcode);
-        $sheet->setCellValue("I$current_row", $row->billing_phone);
-        $sheet->setCellValue("J$current_row", $row->billing_email);
-        $sheet->setCellValue("K$current_row", $row->last_updated);
+        $sheet->setCellValue("B$current_row", json_encode($checkout_data));
+        $sheet->setCellValue("C$current_row", $product_data_str);
+        $sheet->setCellValue("D$current_row", $row->timestamp);
+
         $current_row++;
     }
 
     // Save and serve the Excel file
-    $file_name = 'checkout-data.xlsx';
+    $file_name = 'checkout-data-with-products.xlsx';
     $file_path = plugin_dir_path(__FILE__) . $file_name;
 
     $writer = new Xlsx($spreadsheet);

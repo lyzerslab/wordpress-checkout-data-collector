@@ -9,6 +9,7 @@ function cde_create_table() {
         session_id VARCHAR(255) NOT NULL,
         field_name VARCHAR(255) NOT NULL,
         field_value TEXT NOT NULL,
+        product_data TEXT, -- Add this column for product data
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id)
     ) $charset_collate;";
